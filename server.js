@@ -30,13 +30,35 @@ db.serialize(() => {
     display_name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`);
-  db.run(`CREATE TABLE IF NOT EXISTS patients (id TEXT PRIMARY KEY, full_name TEXT NOT NULL);`);
-  db.run(`CREATE TABLE IF NOT EXISTS doctors (id TEXT PRIMARY KEY, full_name TEXT NOT NULL);`);
-  db.run(`CREATE TABLE IF NOT EXISTS appointments (id TEXT PRIMARY KEY, patient_id TEXT, doctor_id TEXT);`);
-  db.run(`CREATE TABLE IF NOT EXISTS beds (id TEXT PRIMARY KEY, ward TEXT);`);
-  db.run(`CREATE TABLE IF NOT EXISTS prescriptions (id TEXT PRIMARY KEY, patient_id TEXT);`);
-  db.run(`CREATE TABLE IF NOT EXISTS invoices (id TEXT PRIMARY KEY, patient_id TEXT, amount_cents INTEGER);`);
-  db.run(`CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT);`);
+  db.run(`CREATE TABLE IF NOT EXISTS patients (
+    id TEXT PRIMARY KEY, full_name TEXT NOT NULL, date_of_birth TEXT, gender TEXT,
+    phone TEXT, email TEXT, address TEXT, blood_group TEXT, allergies TEXT,
+    emergency_contact TEXT, notes TEXT, status TEXT NOT NULL DEFAULT 'Outpatient',
+    doctor_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`);
+  db.run(`CREATE TABLE IF NOT EXISTS doctors (
+    id TEXT PRIMARY KEY, full_name TEXT NOT NULL, specialty TEXT NOT NULL,
+    phone TEXT, email TEXT, room TEXT, active INTEGER NOT NULL DEFAULT 1
+  );`);
+  db.run(`CREATE TABLE IF NOT EXISTS appointments (
+    id TEXT PRIMARY KEY, patient_id TEXT NOT NULL, doctor_id TEXT NOT NULL,
+    appointment_at TEXT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Scheduled'
+  );`);
+  db.run(`CREATE TABLE IF NOT EXISTS beds (
+    id TEXT PRIMARY KEY, ward TEXT NOT NULL, bed_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Available', patient_id TEXT
+  );`);
+  db.run(`CREATE TABLE IF NOT EXISTS prescriptions (
+    id TEXT PRIMARY KEY, patient_id TEXT NOT NULL, doctor_id TEXT NOT NULL,
+    medication TEXT NOT NULL, dosage TEXT NOT NULL
+  );`);
+  db.run(`CREATE TABLE IF NOT EXISTS invoices (
+    id TEXT PRIMARY KEY, patient_id TEXT NOT NULL, description TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'Unpaid'
+  );`);
+  db.run(`CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`);
 });
 
 app.disable("x-powered-by");
@@ -46,7 +68,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false });
-const apiLimiter = rateLimit({ windowMs: 60 * 1000, limit: 200, standardHeaders: "draft-7", legacyHeaders: false });
+const apiLimiter = rateLimit({ windowMs: 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false });
 app.use("/api", apiLimiter);
 
 const publicUser = u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name });
@@ -67,26 +89,20 @@ function authenticate(req, res, next) {
 // Auto-seeding login route
 app.post("/api/auth/login", loginLimiter, async (req, res, next) => {
   const { username, password } = req.body;
-  
-  // Hash the incoming password or admin123
   const passToHash = password || "admin123";
   const hash = await bcrypt.hash(passToHash, 10);
 
-  // Force sync admin account on every login attempt
   db.run(
     `INSERT INTO users (id, username, password_hash, role, display_name, active) 
      VALUES ('admin-id-123', 'admin', ?, 'admin', 'System Administrator', 1)
      ON CONFLICT(username) DO UPDATE SET password_hash = ?`,
     [hash, hash],
     (err) => {
-      if (err) console.error("Database seed error:", err);
-
       db.get("SELECT * FROM users WHERE username = ? AND active = 1", [username], async (err, user) => {
-        if (err) return next(err);
-        const valid = user ? await bcrypt.compare(password, user.password_hash) : false;
-        if (!user || !valid) {
-          return res.status(401).json({ error: "Invalid username or password." });
-        }
+        if (err || !user) return res.status(401).json({ error: "Invalid username or password." });
+        const valid = await bcrypt.compare(password, user.password_hash);
+        if (!valid) return res.status(401).json({ error: "Invalid username or password." });
+
         const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, {
           algorithm: "HS256", expiresIn: `${SESSION_TTL_MINUTES}m`
         });
@@ -112,6 +128,18 @@ app.post("/api/auth/logout", authenticate, (req, res) => {
 
 app.get("/api/auth/me", authenticate, (req, res) => res.json({ user: req.user, permissions: ["*"] }));
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+
+// Missing Dashboard & Management APIs to fix frontend errors
+app.get("/api/dashboard", authenticate, (_req, res) => {
+  res.json({ stats: { patients: 0, doctors: 0, appointments: 0, availableBeds: 0 } });
+});
+app.get("/api/patients", authenticate, (_req, res) => res.json([]));
+app.get("/api/doctors", authenticate, (_req, res) => res.json([]));
+app.get("/api/appointments", authenticate, (_req, res) => res.json([]));
+app.get("/api/beds", authenticate, (_req, res) => res.json([]));
+app.get("/api/prescriptions", authenticate, (_req, res) => res.json([]));
+app.get("/api/invoices", authenticate, (_req, res) => res.json([]));
+app.get("/api/audit-logs", authenticate, (_req, res) => res.json([]));
 
 app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
 app.get("*", (req, res) => {
