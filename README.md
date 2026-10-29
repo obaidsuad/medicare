@@ -134,3 +134,19 @@ Before a real deployment, a qualified team must at minimum:
 ## License
 
 For learning and portfolio use. Review all dependencies and licensing before commercial redistribution.
+
+## Render deployment and sign-in recovery
+
+In Render → your Web Service → **Environment**, set these values:
+
+- `NODE_ENV` = `production`
+- `COOKIE_SECURE` = `true`
+- `TRUST_PROXY` = `true`
+- `APP_ORIGIN` = your exact public Render URL, including `https://` and with no trailing slash
+- `JWT_SECRET` = a unique random string of at least 32 characters
+- `ADMIN_USERNAME` = the username you will enter on the sign-in page
+- `ADMIN_PASSWORD_HASH` = a bcrypt hash generated with `npm run create-admin-hash -- "Your-Strong-Password-12+"`
+
+Use a long unique password (12+ characters). Do not share it or the hash publicly. After saving environment variables, redeploy. This version synchronizes the configured username's password hash from the private environment variables at startup, so changing the hash can recover sign-in for that configured admin account. It does not change another username's password.
+
+If your existing database already contains users but the configured username is different, set `ADMIN_USERNAME` to the existing admin username. If you intentionally want a fresh demo database, back up anything important before resetting the database.

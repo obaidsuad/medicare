@@ -10,11 +10,9 @@
     "create-admin-hash": "node scripts/hash-password.js",
     "test": "node --test"
   },
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "dependencies": {
-    "sqlite3": "^5.1.7",
+    "better-sqlite3": "^11.8.1",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.7",
@@ -24,7 +22,5 @@
     "jsonwebtoken": "^9.0.2",
     "zod": "^3.24.2"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.9"
-  }
+  "devDependencies": { "nodemon": "^3.1.9" }
 }

@@ -19,7 +19,37 @@ async function api(url, options={}) {
 function toast(message,error=false){const el=$("#toast");el.textContent=message;el.className="toast show"+(error?" error":"");clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.className="toast",3200);}
 function showLogin(){state.user=null;$("#app").classList.add("hidden");$("#login-screen").classList.remove("hidden");$("#login-error").textContent="";$("#login-form").reset();}
 function showApp(user,permissions=[]){state.user=user;state.permissions=permissions;$("#login-screen").classList.add("hidden");$("#app").classList.remove("hidden");$("#user-name").textContent=user.displayName||user.username;$("#user-role").textContent=user.role;$("#user-avatar").textContent=initials(user.displayName||user.username);$$(".admin-only").forEach(el=>el.classList.toggle("hidden",user.role!=="admin"));$("#today").textContent=new Date().toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"});navigate("dashboard");}
-$("#login-form").addEventListener("submit",async e=>{e.preventDefault();const form=new FormData(e.currentTarget);const btn=$("button[type=submit]",e.currentTarget);btn.disabled=true;$("#login-error").textContent="";try{const result=await api("/api/auth/login",{method:"POST",body:{username:form.get("username"),password:form.get("password")}});const me=await api("/api/auth/me");showApp(result.user,me.permissions);toast("Welcome back.");}catch(err){$("#login-error").textContent=err.message;}finally{btn.disabled=false;}});
+// Remove accidental credentials/query strings from the address bar. Credentials must be entered in the form, never in the URL.
+if (location.search && /(?:username|password)=/i.test(location.search)) {
+  history.replaceState(null, "", location.pathname + location.hash);
+}
+
+$("#login-form").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const form = new FormData(e.currentTarget);
+  const username = String(form.get("username") || "").trim();
+  const password = String(form.get("password") || "");
+  const btn = $("button[type=submit]", e.currentTarget);
+  const error = $("#login-error");
+  error.textContent = "";
+  if (!username || !password) {
+    error.textContent = "Enter both your username and password, then try again.";
+    return;
+  }
+  btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
+  try {
+    const result = await api("/api/auth/login", {method:"POST", body:{username, password}});
+    const me = await api("/api/auth/me");
+    showApp(result.user, me.permissions);
+    toast("Welcome back.");
+  } catch (err) {
+    error.textContent = err.message || "Sign in failed. Please try again.";
+  } finally {
+    btn.disabled = false;
+    btn.removeAttribute("aria-busy");
+  }
+});
 $("#logout").addEventListener("click",async()=>{try{await api("/api/auth/logout",{method:"POST"});}catch(_){}showLogin();toast("You have signed out.");});
 $("#nav").addEventListener("click",e=>{const btn=e.target.closest("[data-page]");if(btn)navigate(btn.dataset.page);});
 $("#menu-toggle").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
@@ -29,7 +59,32 @@ function statusBadge(status){const cls=({Paid:"green",Available:"green",Complete
 function person(name,sub=""){return `<div class="person"><div class="person-avatar">${esc(initials(name))}</div><div><b>${esc(name||"Unknown")}</b>${sub?`<small>${esc(sub)}</small>`:""}</div></div>`;}
 function emptyRow(n,msg){return `<tr><td colspan="${n}" class="empty">${esc(msg)}</td></tr>`;}
 function sectionTitle(title,subtitle,action=""){return `<div class="section-title"><div><h2>${title}</h2><p>${subtitle}</p></div>${action}</div>`;}
-async function renderDashboard(){const d=await api("/api/dashboard");const m=d.metrics;$("#page-content").innerHTML=`
+async function renderDashboard(){
+let d=await api("/api/dashboard");
+// Be tolerant of older/mismatched API response shapes so the dashboard does not crash.
+let m=d && d.metrics;
+let upcoming=Array.isArray(d && d.upcoming)?d.upcoming:[];
+if(!m || typeof m!=="object"){
+  const [pd,dd,ad,bd,id]=await Promise.all([
+    api("/api/patients"),api("/api/doctors"),api("/api/appointments"),api("/api/beds"),api("/api/invoices")
+  ]);
+  const patients=Array.isArray(pd.patients)?pd.patients:[];
+  const doctors=Array.isArray(dd.doctors)?dd.doctors:[];
+  const appointments=Array.isArray(ad.appointments)?ad.appointments:[];
+  const beds=Array.isArray(bd.beds)?bd.beds:[];
+  const invoices=Array.isArray(id.invoices)?id.invoices:[];
+  const today=new Date().toISOString().slice(0,10);
+  m={patients:patients.length,doctors:doctors.filter(x=>x.active).length,
+    appointmentsToday:appointments.filter(x=>String(x.appointment_at||"").slice(0,10)===today&&x.status!=="Cancelled").length,
+    availableBeds:beds.filter(x=>x.status==="Available").length,
+    occupiedBeds:beds.filter(x=>x.status==="Occupied").length,
+    paidRevenueCents:invoices.filter(x=>x.status==="Paid").reduce((sum,x)=>sum+(Number(x.amount_cents)||0),0),
+    unpaidCents:invoices.filter(x=>x.status==="Unpaid").reduce((sum,x)=>sum+(Number(x.amount_cents)||0),0)};
+  upcoming=appointments.filter(x=>["Scheduled","Checked In"].includes(x.status)).sort((a,b)=>new Date(a.appointment_at)-new Date(b.appointment_at)).slice(0,6);
+}
+for(const key of ["patients","doctors","appointmentsToday","availableBeds","occupiedBeds","paidRevenueCents","unpaidCents"]) if(!Number.isFinite(Number(m[key]))) m[key]=0;
+if(!Array.isArray(upcoming)) upcoming=[];
+$("#page-content").innerHTML=`
 <div class="grid metrics">
 <div class="metric"><div class="metric-head">Total patients <span class="metric-icon">♙</span></div><div class="metric-value">${m.patients}</div><div class="metric-foot">Registered patient records</div></div>
 <div class="metric"><div class="metric-head">Active doctors <span class="metric-icon">✚</span></div><div class="metric-value">${m.doctors}</div><div class="metric-foot">Medical team members</div></div>
@@ -38,7 +93,7 @@ async function renderDashboard(){const d=await api("/api/dashboard");const m=d.m
 </div>
 <div class="grid dashboard-grid">
 <div class="panel"><div class="panel-head"><div><h2>Upcoming appointments</h2><p>Latest scheduled and checked-in visits</p></div><button class="btn btn-secondary btn-small" data-goto="appointments">View all →</button></div>
-<div class="table-wrap"><table><thead><tr><th>Patient</th><th>Doctor</th><th>Schedule</th><th>Status</th></tr></thead><tbody>${d.upcoming.length?d.upcoming.map(a=>`<tr><td>${person(a.patient_name,a.reason)}</td><td>${esc(a.doctor_name)}</td><td>${dateText(a.appointment_at)}</td><td>${statusBadge(a.status)}</td></tr>`).join(""):emptyRow(4,"No upcoming appointments yet.")}</tbody></table></div></div>
+<div class="table-wrap"><table><thead><tr><th>Patient</th><th>Doctor</th><th>Schedule</th><th>Status</th></tr></thead><tbody>${upcoming.length?upcoming.map(a=>`<tr><td>${person(a.patient_name,a.reason)}</td><td>${esc(a.doctor_name)}</td><td>${dateText(a.appointment_at)}</td><td>${statusBadge(a.status)}</td></tr>`).join(""):emptyRow(4,"No upcoming appointments yet.")}</tbody></table></div></div>
 <div class="panel"><div class="panel-head"><div><h2>Financial snapshot</h2><p>Recorded invoice totals</p></div><span class="metric-icon">৳</span></div>
 <div class="stat-line"><span>Paid revenue</span><b>${money(m.paidRevenueCents)}</b></div><div class="stat-line"><span>Outstanding invoices</span><b>${money(m.unpaidCents)}</b></div>
 <div class="stat-line"><span>Bed occupancy</span><b>${m.occupiedBeds} / ${m.occupiedBeds+m.availableBeds}</b></div><div class="progress"><span style="width:${m.occupiedBeds+m.availableBeds?Math.round(m.occupiedBeds/(m.occupiedBeds+m.availableBeds)*100):0}%"></span></div>
